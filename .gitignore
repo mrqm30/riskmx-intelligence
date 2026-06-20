@@ -8,6 +8,13 @@ wheels/
 
 # Virtual environments
 .venv/
+__pycache__/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+
+.env
+
 
 # Data (local only — too large for GitHub)
 data/
@@ -18,3 +25,35 @@ data/
 # Jupyter checkpoints
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
+
+# Local data lake and generated artifacts
+data
+data/
+reports
+reports/
+models
+models/
+mlruns
+mlruns/
+artifacts
+artifacts/
+logs
+logs/
+
+
+# Data files
+*.csv
+*.tsv
+*.xlsx
+*.jsonl
+*.parquet
+*.duckdb
+*.db
+*.sqlite
+
+# Ml artifacts
+*.pkl
+*.joblib
+*.onnx
+
+
