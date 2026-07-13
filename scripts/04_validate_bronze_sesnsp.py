@@ -60,7 +60,7 @@ def main() -> None:
     print("=" * 100)
     print("Sample:")
     print(df.head(5))
-
+    print(df.columns)
     print("=" * 100)
     print("BRONZE validation OK")
 
