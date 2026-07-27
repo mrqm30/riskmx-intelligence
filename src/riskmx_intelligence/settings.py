@@ -50,5 +50,9 @@ class Settings(BaseSettings):
     def tmp_path(self) -> Path:
         return self.data_root / "tmp"
 
+    @property
+    def quarantine_path(self) -> Path:
+        return self.data_root / "quarantine"
+
 
 settings = Settings()

@@ -1,6 +1,7 @@
 from pathlib import Path
-from typing import Required
-import polars as pl 
+
+import polars as pl
+
 from riskmx_intelligence.settings import settings
 
 DATA_SETNAME  = "incidencia_delictiva_municipal"
@@ -146,34 +147,51 @@ def main() -> None:
         ]
     )
 
-    # SESNSP usa valores negativos (típicamente -1) como centinela de
-    # "no disponible / no reportado". Se coercionan a 0 para eliminar nulls
-    # en silver y cumplir la regla de cantidad >= 0 sin valores nulos.
-    negative_count = silver_df.filter(pl.col("cantidad") < 0).height
-    if negative_count > 0:
-        print(
-            f"Coercing {negative_count:,} negative cantidad values to 0 "
-            "(SESNSP 'no disponible' sentinel)."
-        )
-
     silver_df = silver_df.with_columns(
         [
             pl.col("anio").cast(pl.Int32),
             pl.col("clave_entidad").cast(pl.Int32),
             pl.col("clave_municipio").cast(pl.Int32),
-
-            # Se conserva evidencia de que el valor venía nulo desde Bronze.
-            pl.col("cantidad").is_null().alias("cantidad_original_null"),
-
-            # Regla Silver:
-            # si cantidad viene nula desde fuente, se imputa como 0.
-            pl.col("cantidad").fill_null(0).cast(pl.Int64).alias("cantidad"),
-
+            pl.col("cantidad").cast(pl.Int64),
             pl.col("mes_nombre").replace(MONTH_MAP).cast(pl.Int8).alias("mes"),
             pl.col("clave_entidad").cast(pl.Utf8).str.zfill(2).alias("clave_entidad_str"),
             pl.col("clave_municipio").cast(pl.Utf8).str.zfill(5).alias("clave_municipio_str"),
         ]
     )
+
+    # SESNSP usa valores negativos (típicamente -1) como centinela de
+    # "no disponible / no reportado". Se confirmó contra el CSV original
+    # (IDM_NM_dic25.csv) que estos valores son error de captura de la
+    # fuente. No representan una cantidad de delitos válida y se excluyen
+    # del análisis (no se imputan a 0, para no inflar artificialmente los
+    # totales de "sin incidencia"). Bronze permanece intacto; los
+    # registros excluidos se preservan en cuarentena para auditoría.
+    is_invalid = (pl.col("cantidad") < 0) | pl.col("cantidad").is_null()
+    invalid_count = silver_df.filter(is_invalid).height
+
+    if invalid_count > 0:
+        quarantine_dir = (
+            settings.quarantine_path
+            / "sesnsp"
+            / DATA_SETNAME
+            / f"ingestion_date={ingestion_date}"
+        )
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        quarantine_file = quarantine_dir / "invalid_cantidad_rows.parquet"
+
+        silver_df.filter(is_invalid).with_columns(
+            pl.lit("negative_or_null_cantidad_source_error").alias(
+                "exclusion_reason"
+            )
+        ).write_parquet(quarantine_file)
+
+        print(
+            f"Excluding {invalid_count:,} rows with invalid cantidad "
+            "(negative sentinel or null, confirmed source data entry error). "
+            f"Quarantined to: {quarantine_file}"
+        )
+
+        silver_df = silver_df.filter(~is_invalid)
 
     silver_df = silver_df.with_columns(
         [

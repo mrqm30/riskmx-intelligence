@@ -213,26 +213,18 @@ def check_total_quantity_consistency(
     bronze_df: pl.DataFrame,
     silver_df: pl.DataFrame,
     month_columns: list[str],
+    quarantined_total: int = 0,
 ) -> QualityCheckResult:
-    # Bronze mantiene los sentinelas del SESNSP (cantidades negativas = "no
-    # disponible"). Silver los coerciona a 0 para cumplir la regla cantidad >= 0.
-    # La reconciliación debe aplicar la misma coerción en bronze para comparar
-    # totales bajo reglas equivalentes.
-    def coerced_sum_expr(column: str) -> pl.Expr:
-        return (
-            pl.when(pl.col(column) < 0)
-            .then(0)
-            .otherwise(pl.col(column))
-            .sum()
-        )
-
+    # SESNSP usa valores negativos (típicamente -1) como centinela de "no
+    # disponible". Se confirmó contra la fuente que son error de captura.
+    # Silver los excluye del análisis (no los imputa), por lo que la
+    # reconciliación debe restar del total de bronze la suma de las
+    # cantidades excluidas (quarantined_total) antes de comparar.
     bronze_total_raw = bronze_df.select(
         sum(pl.col(column).sum() for column in month_columns)
     ).item()
 
-    bronze_total_coerced = bronze_df.select(
-        sum(coerced_sum_expr(column) for column in month_columns)
-    ).item()
+    bronze_total_expected = bronze_total_raw - quarantined_total
 
     negative_sentinel_rows = bronze_df.select(
         sum(
@@ -245,17 +237,19 @@ def check_total_quantity_consistency(
 
     metrics = {
         "bronze_total_raw": bronze_total_raw,
-        "bronze_total_coerced": bronze_total_coerced,
+        "quarantined_total": quarantined_total,
+        "bronze_total_expected": bronze_total_expected,
         "silver_total": silver_total,
         "negative_sentinel_rows": negative_sentinel_rows,
-        "difference": silver_total - bronze_total_coerced,
+        "difference": silver_total - bronze_total_expected,
     }
 
-    if bronze_total_coerced != silver_total:
+    if bronze_total_expected != silver_total:
         return fail_check(
             check_name="total_quantity_consistency",
             message=(
-                "Total quantity mismatch between bronze (coerced) and silver."
+                "Total quantity mismatch between bronze (excluding "
+                "quarantined rows) and silver."
             ),
             metrics=metrics,
         )
@@ -263,7 +257,8 @@ def check_total_quantity_consistency(
     return pass_check(
         check_name="total_quantity_consistency",
         message=(
-            "Total quantity matches between bronze (coerced) and silver."
+            "Total quantity matches between bronze (excluding quarantined "
+            "rows) and silver."
         ),
         metrics=metrics,
     )
@@ -273,8 +268,12 @@ def check_row_count_reconciliation(
     bronze_df: pl.DataFrame,
     silver_df: pl.DataFrame,
     expected_multiplier: int = 12,
+    quarantined_rows: int = 0,
 ) -> QualityCheckResult:
-    expected_rows = bronze_df.height * expected_multiplier
+    # Filas excluidas por cantidad inválida (sentinela negativo o null,
+    # confirmado error de captura de la fuente) reducen el total esperado
+    # respecto a la expansión completa bronze x meses.
+    expected_rows = bronze_df.height * expected_multiplier - quarantined_rows
     actual_rows = silver_df.height
 
     if actual_rows != expected_rows:
@@ -283,6 +282,7 @@ def check_row_count_reconciliation(
             message="Silver row count does not match expected bronze expansion.",
             metrics={
                 "bronze_rows": bronze_df.height,
+                "quarantined_rows": quarantined_rows,
                 "expected_silver_rows": expected_rows,
                 "actual_silver_rows": actual_rows,
             },
@@ -293,6 +293,7 @@ def check_row_count_reconciliation(
         message="Silver row count matches expected bronze expansion.",
         metrics={
             "bronze_rows": bronze_df.height,
+            "quarantined_rows": quarantined_rows,
             "expected_silver_rows": expected_rows,
             "actual_silver_rows": actual_rows,
         },

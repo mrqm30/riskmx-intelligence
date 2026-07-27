@@ -31,23 +31,38 @@ def get_latest_silver_file() -> Path:
     return files[-1]
 
 
+def get_latest_quarantine_file() -> Path | None:
+    base_path = settings.quarantine_path / "sesnsp" / DATASET_NAME
+    files = sorted(base_path.glob("ingestion_date=*/invalid_cantidad_rows.parquet"))
+
+    return files[-1] if files else None
+
+
 def main() -> None:
     bronze_file = get_latest_bronze_file()
     silver_file = get_latest_silver_file()
+    quarantine_file = get_latest_quarantine_file()
 
     print("Validating SILVER file")
     print("=" * 100)
     print(f"Bronze file: {bronze_file}")
     print(f"Silver file: {silver_file}")
+    print(f"Quarantine file: {quarantine_file}")
     print("=" * 100)
 
     bronze_df = pl.read_parquet(bronze_file)
     silver_df = pl.read_parquet(silver_file)
+    quarantined_rows = (
+        pl.read_parquet(quarantine_file).height if quarantine_file else 0
+    )
 
-    expected_rows = bronze_df.height * 12
+    # Filas excluidas por cantidad inválida (sentinela negativo o null,
+    # confirmado error de captura de la fuente) reducen el total esperado.
+    expected_rows = bronze_df.height * 12 - quarantined_rows
     actual_rows = silver_df.height
 
     print(f"Bronze rows: {bronze_df.height:,}")
+    print(f"Quarantined rows: {quarantined_rows:,}")
     print(f"Expected silver rows: {expected_rows:,}")
     print(f"Actual silver rows: {actual_rows:,}")
 

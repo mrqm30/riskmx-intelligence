@@ -78,12 +78,21 @@ def get_latest_file(base_path: Path, pattern: str) -> Path:
     return files[-1]
 
 
+def get_latest_quarantine_file(base_path: Path) -> Path | None:
+    files = sorted(base_path.glob("ingestion_date=*/invalid_cantidad_rows.parquet"))
+
+    return files[-1] if files else None
+
+
 def main() -> None:
     bronze_base_path = settings.bronze_path / "sesnsp" / DATASET_NAME
     silver_base_path = settings.silver_path / "sesnsp" / DATASET_NAME
 
     bronze_file = get_latest_file(bronze_base_path, "ingestion_date=*/data.parquet")
     silver_file = get_latest_file(silver_base_path, "ingestion_date=*/data.parquet")
+
+    quarantine_base_path = settings.quarantine_path / "sesnsp" / DATASET_NAME
+    quarantine_file = get_latest_quarantine_file(quarantine_base_path)
 
     ingestion_date = silver_file.parent.name.replace("ingestion_date=", "")
 
@@ -99,11 +108,20 @@ def main() -> None:
     print("=" * 100)
     print(f"Bronze file: {bronze_file}")
     print(f"Silver file: {silver_file}")
+    print(f"Quarantine file: {quarantine_file}")
     print(f"Report dir: {report_dir}")
     print("=" * 100)
 
     bronze_df = pl.read_parquet(bronze_file)
     silver_df = pl.read_parquet(silver_file)
+
+    if quarantine_file is not None:
+        quarantine_df = pl.read_parquet(quarantine_file)
+        quarantined_rows = quarantine_df.height
+        quarantined_total = quarantine_df.select(pl.col("cantidad").sum()).item()
+    else:
+        quarantined_rows = 0
+        quarantined_total = 0
 
     results = [
         check_not_empty(silver_df),
@@ -114,8 +132,18 @@ def main() -> None:
         check_year_range(silver_df, "anio", min_year=2015),
         check_unique_grain(silver_df, SILVER_GRAIN_COLUMNS),
         check_catalog_cardinality(silver_df),
-        check_row_count_reconciliation(bronze_df, silver_df, expected_multiplier=12),
-        check_total_quantity_consistency(bronze_df, silver_df, MONTH_COLUMNS),
+        check_row_count_reconciliation(
+            bronze_df,
+            silver_df,
+            expected_multiplier=12,
+            quarantined_rows=quarantined_rows,
+        ),
+        check_total_quantity_consistency(
+            bronze_df,
+            silver_df,
+            MONTH_COLUMNS,
+            quarantined_total=quarantined_total,
+        ),
     ]
 
     json_path, md_path = write_quality_report(
