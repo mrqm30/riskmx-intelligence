@@ -214,31 +214,58 @@ def check_total_quantity_consistency(
     silver_df: pl.DataFrame,
     month_columns: list[str],
 ) -> QualityCheckResult:
-    bronze_total = bronze_df.select(
+    # Bronze mantiene los sentinelas del SESNSP (cantidades negativas = "no
+    # disponible"). Silver los coerciona a 0 para cumplir la regla cantidad >= 0.
+    # La reconciliación debe aplicar la misma coerción en bronze para comparar
+    # totales bajo reglas equivalentes.
+    def coerced_sum_expr(column: str) -> pl.Expr:
+        return (
+            pl.when(pl.col(column) < 0)
+            .then(0)
+            .otherwise(pl.col(column))
+            .sum()
+        )
+
+    bronze_total_raw = bronze_df.select(
         sum(pl.col(column).sum() for column in month_columns)
+    ).item()
+
+    bronze_total_coerced = bronze_df.select(
+        sum(coerced_sum_expr(column) for column in month_columns)
+    ).item()
+
+    negative_sentinel_rows = bronze_df.select(
+        sum(
+            (pl.col(column) < 0).sum()
+            for column in month_columns
+        )
     ).item()
 
     silver_total = silver_df.select(pl.col("cantidad").sum()).item()
 
-    if bronze_total != silver_total:
+    metrics = {
+        "bronze_total_raw": bronze_total_raw,
+        "bronze_total_coerced": bronze_total_coerced,
+        "silver_total": silver_total,
+        "negative_sentinel_rows": negative_sentinel_rows,
+        "difference": silver_total - bronze_total_coerced,
+    }
+
+    if bronze_total_coerced != silver_total:
         return fail_check(
             check_name="total_quantity_consistency",
-            message="Total quantity mismatch between bronze and silver.",
-            metrics={
-                "bronze_total": bronze_total,
-                "silver_total": silver_total,
-                "difference": silver_total - bronze_total,
-            },
+            message=(
+                "Total quantity mismatch between bronze (coerced) and silver."
+            ),
+            metrics=metrics,
         )
 
     return pass_check(
         check_name="total_quantity_consistency",
-        message="Total quantity matches between bronze and silver.",
-        metrics={
-            "bronze_total": bronze_total,
-            "silver_total": silver_total,
-            "difference": 0,
-        },
+        message=(
+            "Total quantity matches between bronze (coerced) and silver."
+        ),
+        metrics=metrics,
     )
 
 

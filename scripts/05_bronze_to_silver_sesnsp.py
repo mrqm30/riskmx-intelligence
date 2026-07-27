@@ -147,12 +147,12 @@ def main() -> None:
     )
 
     # SESNSP usa valores negativos (típicamente -1) como centinela de
-    # "no disponible / no reportado". Se preservan como null para no mezclarlos
-    # con incidencia 0 y cumplir la regla de cantidad >= 0 en silver.
+    # "no disponible / no reportado". Se coercionan a 0 para eliminar nulls
+    # en silver y cumplir la regla de cantidad >= 0 sin valores nulos.
     negative_count = silver_df.filter(pl.col("cantidad") < 0).height
     if negative_count > 0:
         print(
-            f"Coercing {negative_count:,} negative cantidad values to null "
+            f"Coercing {negative_count:,} negative cantidad values to 0 "
             "(SESNSP 'no disponible' sentinel)."
         )
 
@@ -161,11 +161,14 @@ def main() -> None:
             pl.col("anio").cast(pl.Int32),
             pl.col("clave_entidad").cast(pl.Int32),
             pl.col("clave_municipio").cast(pl.Int32),
-            pl.when(pl.col("cantidad") < 0)
-            .then(None)
-            .otherwise(pl.col("cantidad"))
-            .cast(pl.Int64)
-            .alias("cantidad"),
+
+            # Se conserva evidencia de que el valor venía nulo desde Bronze.
+            pl.col("cantidad").is_null().alias("cantidad_original_null"),
+
+            # Regla Silver:
+            # si cantidad viene nula desde fuente, se imputa como 0.
+            pl.col("cantidad").fill_null(0).cast(pl.Int64).alias("cantidad"),
+
             pl.col("mes_nombre").replace(MONTH_MAP).cast(pl.Int8).alias("mes"),
             pl.col("clave_entidad").cast(pl.Utf8).str.zfill(2).alias("clave_entidad_str"),
             pl.col("clave_municipio").cast(pl.Utf8).str.zfill(5).alias("clave_municipio_str"),
